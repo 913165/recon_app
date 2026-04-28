@@ -1,0 +1,3 @@
+fileId,recordId,reportDate,entityId,rconCode,balance,drCrInd,currency,sourceRef,comments
+F-CSV-1,REC-1,2026-04-28,E001,RCON0010,1000.00,CR,USD,TXN-1,ok
+
