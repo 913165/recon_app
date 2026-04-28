@@ -1080,5 +1080,4 @@ TRL|5|125550000.00|COMPLETE
 
 *End of prompt. Provide this document to GitHub Copilot Chat using:*
 *"Generate a complete Spring Boot application based on the following specification:"*
-*then paste this entire file.*#   r e c o n _ a p p  
- 
+*then paste this entire file.*#
