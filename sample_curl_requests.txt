@@ -1,0 +1,597 @@
+################################################################################
+#                                                                              #
+#          RCON Reconciliation System — Sample cURL Requests                   #
+#          Base URL : http://localhost:8080                                    #
+#          Date     : 2026-04-29                                               #
+#                                                                              #
+#  HOW TO USE THIS FILE                                                        #
+#  --------------------                                                        #
+#  1. Start PostgreSQL + Kafka  : docker compose up -d postgres kafka          #
+#  2. Start the application     : .\mvnw.cmd -pl recon-api spring-boot:run     #
+#  3. Copy any curl command below and paste it into your terminal              #
+#                                                                              #
+#  NOTES                                                                       #
+#  ------                                                                      #
+#  - Security is set to permitAll() in SecurityConfig.java, so no             #
+#    Authorization header is needed for local development.                     #
+#  - All dates use ISO format: YYYY-MM-DD                                      #
+#  - On Windows Command Prompt replace single quotes ' with double quotes "    #
+#  - On Windows PowerShell use: Invoke-RestMethod (examples at the bottom)     #
+#                                                                              #
+################################################################################
+
+
+################################################################################
+# SECTION 0 — TROUBLESHOOTING: FILE WATCHER NOT PICKING UP FILES
+#
+# SYMPTOM: You dropped a .dat / .csv / .txt file into data/landing/ but
+#          nothing happened — no log output, no results in the DB.
+#
+# ROOT CAUSE (most common):
+#   The startup log shows this warning:
+#     WARN ... LocalFileWatcherService : Landing path \data\landing not found, watcher idle
+#
+#   The default path was /data/landing (a Linux absolute path).
+#   On Windows this resolved to C:\data\landing — NOT your project folder.
+#   FIX: application.yml default changed to: data/landing  (relative to project)
+#        Rebuild and restart the app — the watcher will then activate.
+#
+# HOW TO VERIFY THE WATCHER IS ACTIVE:
+#   After app startup look for this log line (NOT the warning):
+#     INFO  LocalFileWatcherService : Watching landing directory data\landing
+#   If you see that line, the watcher is running correctly.
+#
+# CORRECT FOLDER LOCATION:
+#   C:\googlecloud_work\hdfc_jobserver\recon_app\data\landing\
+#
+# HOW TO DROP A FILE (PowerShell):
+#   copy recon-ingestion\src\test\resources\sample\SRCA_RECON_20260428_093000_001.dat data\landing\
+#
+# AFTER DROPPING — WAIT 3–5 SECONDS then run:
+#   curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-28&sourceSystem=CORE_BANKING"
+#
+# DO I NEED TO CALL A REST API TO TRIGGER PROCESSING?
+#   NO. The file watcher triggers automatically when a file lands.
+#   The pipeline is fully event-driven:
+#     file lands → watcher detects → registers in DB → publishes Kafka event
+#               → parser runs → staging table written → matching runs → results available
+#   You only use the REST API to QUERY results — not to trigger processing.
+#
+# IF THE WATCHER STILL DOES NOT FIRE after the fix:
+#   1. Check the landing directory exists:
+#        Test-Path C:\googlecloud_work\hdfc_jobserver\recon_app\data\landing
+#   2. Confirm the startup log shows "Watching landing directory" (not the warning)
+#   3. Try restarting the application — the watcher registers at @PostConstruct time
+#   4. Make sure the file extension is .dat, .csv, or .txt (other extensions are ignored)
+#   5. Check app logs for any exception after the file was dropped
+################################################################################
+
+
+################################################################################
+# SECTION 1 — HEALTH & ACTUATOR ENDPOINTS
+# These work immediately after startup — no data needed.
+################################################################################
+
+# ── 1.1  Application health check ────────────────────────────────────────────
+# Returns: { "status": "UP", "components": { "db": {...}, "diskSpace": {...} } }
+# Use this first to confirm the app started correctly and PostgreSQL is reachable.
+
+curl -s http://localhost:8080/actuator/health | python -m json.tool
+
+# ── 1.2  Application info ─────────────────────────────────────────────────────
+# Returns build info, git commit, Java version etc. (configured in application.yml)
+
+curl -s http://localhost:8080/actuator/info | python -m json.tool
+
+# ── 1.3  List all available actuator endpoints ────────────────────────────────
+# Useful to discover what monitoring endpoints are exposed.
+
+curl -s http://localhost:8080/actuator | python -m json.tool
+
+# ── 1.4  Prometheus metrics (raw text format) ────────────────────────────────
+# Used by Prometheus/Grafana scraping. Look for recon_* custom metrics.
+# Pipe through grep to filter: curl ... | grep recon
+
+curl -s http://localhost:8080/actuator/prometheus
+
+# ── 1.5  Filter Prometheus metrics to only recon-specific ones ───────────────
+# Shows business metrics: files processed, breaks found, processing time
+
+curl -s http://localhost:8080/actuator/prometheus | grep "^recon"
+
+# ── 1.6  JVM memory usage ────────────────────────────────────────────────────
+# Useful for monitoring heap and non-heap usage over time
+
+curl -s "http://localhost:8080/actuator/metrics/jvm.memory.used" | python -m json.tool
+
+# ── 1.7  HTTP request statistics ─────────────────────────────────────────────
+# Shows count, total time, max time for all HTTP endpoints
+
+curl -s "http://localhost:8080/actuator/metrics/http.server.requests" | python -m json.tool
+
+
+################################################################################
+# SECTION 2 — FILE REGISTRY ENDPOINTS
+# Base path: /api/v1/files
+# These endpoints track every flat file received by the system.
+################################################################################
+
+# ── 2.1  List all files processed on a specific date for CORE_BANKING ────────
+# Required params:
+#   reportDate   = business date of the file (YYYY-MM-DD)
+#   sourceSystem = CORE_BANKING | LOANS_SYS | TRADING_GL
+#
+# Returns a JSON array. Empty array [] means no files received yet.
+# Try this AFTER dropping a .dat file in data/landing/
+
+curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-28&sourceSystem=CORE_BANKING" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 2.2  List files for LOANS_SYS ────────────────────────────────────────────
+
+curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-28&sourceSystem=LOANS_SYS" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 2.3  List files for TRADING_GL ───────────────────────────────────────────
+
+curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-28&sourceSystem=TRADING_GL" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 2.4  Get processing status of a specific file by fileId ──────────────────
+# fileId comes from the HDR line of the .dat file or from the 2.1 response.
+# File statuses: RECEIVED → PROCESSING → COMPLETED | FAILED
+#
+# Replace SRCA_20260428_001 with the actual fileId from your file's HDR line.
+
+curl -s "http://localhost:8080/api/v1/files/SRCA_20260428_001/status" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 2.5  Reprocess a failed file ──────────────────────────────────────────────
+# Use when a file shows status=FAILED in the registry.
+# This marks it for reprocessing — the batch job will pick it up on next run.
+# HTTP method: POST (no request body needed)
+
+curl -s -X POST "http://localhost:8080/api/v1/files/SRCA_20260428_001/reprocess" \
+     -H "Accept: application/json"
+
+# ── 2.6  List files for today's date ─────────────────────────────────────────
+# Handy shortcut — replace $(date +%F) with today's date if not on Linux/Mac.
+# On Windows manually set: 2026-04-29
+
+curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=CORE_BANKING" \
+     -H "Accept: application/json" | python -m json.tool
+
+
+################################################################################
+# SECTION 3 — RECONCILIATION RESULTS ENDPOINTS
+# Base path: /api/v1/recon
+#
+# IMPORTANT — Required query parameters for /results:
+#   reportDate  : YYYY-MM-DD
+#   entityId    : reporting entity, e.g. E001 (bank branch or subsidiary)
+#   status      : MATCHED | BREAK | UNMATCHED | PARTIAL
+#   severity    : LOW | MEDIUM | HIGH | CRITICAL
+#   page        : page number (0-based), default 0
+#   size        : results per page, default 50
+#
+# Match status meanings:
+#   MATCHED   = both sources agree within tolerance — clean
+#   BREAK     = difference exceeds tolerance — needs investigation
+#   UNMATCHED = record exists in only ONE source system
+#   PARTIAL   = one source has data but the counterpart source has none at all
+#
+# Severity is based on the absolute difference amount:
+#   LOW      = difference < $1,000
+#   MEDIUM   = difference $1,000 – $9,999
+#   HIGH     = difference $10,000 – $99,999
+#   CRITICAL = difference >= $100,000
+################################################################################
+
+# ── 3.1  Get all MATCHED results (clean records) ──────────────────────────────
+# These are the healthy records — both sides agreed.
+# Useful for confirming how many records reconciled cleanly.
+
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=MATCHED&severity=LOW" \
+     -H "Accept: application/json" \
+     -H "API-Version: 1" | python -m json.tool
+
+# ── 3.2  Get BREAK results — these need investigation ────────────────────────
+# BREAKs are the primary output operations teams work through each day.
+# Shows records where balance_a != balance_b (beyond tolerance).
+
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=BREAK&severity=HIGH" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 3.3  Get CRITICAL BREAKs (difference >= $100,000) ────────────────────────
+# CRITICAL breaks trigger automatic Slack notifications and JIRA tickets.
+# These should be investigated first every morning.
+
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=BREAK&severity=CRITICAL" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 3.4  Get MEDIUM severity BREAKs ──────────────────────────────────────────
+
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=BREAK&severity=MEDIUM" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 3.5  Get UNMATCHED results — record in one source only ───────────────────
+# UNMATCHED = CORE_BANKING has a record but LOANS_SYS has nothing for it (or vice versa).
+# Common cause: file from one system not yet received.
+
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=UNMATCHED&severity=LOW" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 3.6  Get PARTIAL results — one whole source missing ──────────────────────
+# PARTIAL = we have records from LOANS_SYS but CORE_BANKING sent nothing at all.
+# Different from UNMATCHED — here a whole source system went silent.
+
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=PARTIAL&severity=HIGH" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 3.7  Get results with pagination — page 0, 10 records per page ────────────
+# Use when you have many results and need to page through them.
+# Response includes: totalElements, totalPages, number (current page), size.
+
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=MATCHED&severity=LOW&page=0&size=10" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 3.8  Get results — page 1 (second page) ──────────────────────────────────
+
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=MATCHED&severity=LOW&page=1&size=10" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 3.9  Get a SINGLE result by reconId ──────────────────────────────────────
+# reconId format: {fileId}-{recordId}
+# e.g. SRCA_20260428_001-SRCA000001
+# Get the reconId from the results list above (field "reconId" in each item).
+
+curl -s "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000001" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 3.10  Get another single result (RCON code RCON0071) ─────────────────────
+
+curl -s "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000002" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 3.11  404 — result not found (expected error, good for testing) ───────────
+# Returns RFC 9457 Problem Detail:
+# { "type": "...", "title": "Resource Not Found", "status": 404, "detail": "..." }
+
+curl -s "http://localhost:8080/api/v1/recon/results/DOES-NOT-EXIST" \
+     -H "Accept: application/json" | python -m json.tool
+
+
+################################################################################
+# SECTION 4 — RESOLVE A BREAK
+# HTTP method: PATCH /api/v1/recon/results/{reconId}/resolve
+#
+# Called by an operations analyst after investigating a break and determining
+# the cause. Records the resolution note and marks the break as resolved=true.
+#
+# Request body:
+#   { "resolutionNote": "Explanation of why the break occurred" }
+#
+# resolutionNote is REQUIRED and must not be blank (enforced by @Valid).
+################################################################################
+
+# ── 4.1  Resolve a break — timing difference explanation ─────────────────────
+# Replace the reconId with an actual BREAK reconId from your results.
+
+curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000003/resolve" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json" \
+     -d '{"resolutionNote": "Timing difference — loan disbursement posted after CORE_BANKING cut-off at 17:00. Confirmed with Loans Operations desk on 2026-04-29."}' \
+     | python -m json.tool
+
+# ── 4.2  Resolve a break — system error explanation ──────────────────────────
+
+curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000004/resolve" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json" \
+     -d '{"resolutionNote": "Deposit system rounding difference of $0.50 — within acceptable tolerance. Waived per ops manager approval #OPS-2026-0429."}' \
+     | python -m json.tool
+
+# ── 4.3  Resolve a break — known upstream feed issue ─────────────────────────
+
+curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000005/resolve" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json" \
+     -d '{"resolutionNote": "TRADING_GL feed delayed — security was not valued until T+1. Will auto-resolve in next day recon cycle."}' \
+     | python -m json.tool
+
+# ── 4.4  Validation error — empty resolutionNote (expected 400) ───────────────
+# resolutionNote is required. This returns HTTP 400 Bad Request.
+# Response: { "status": 400, "title": "Validation Failed", "detail": "..." }
+
+curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000003/resolve" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json" \
+     -d '{"resolutionNote": ""}' \
+     | python -m json.tool
+
+# ── 4.5  Missing request body (expected 400) ─────────────────────────────────
+
+curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000003/resolve" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json" \
+     | python -m json.tool
+
+
+################################################################################
+# SECTION 5 — DAILY SUMMARY ENDPOINT
+# GET /api/v1/recon/summary?reportDate=YYYY-MM-DD
+#
+# Returns aggregate counts for an entire business day across all entities.
+# This is the "dashboard view" — what an operations manager looks at first
+# thing every morning to assess the health of the prior day's reconciliation.
+#
+# Response fields:
+#   reportDate      : the date queried
+#   totalRecords    : total records processed across all source systems
+#   matched         : count of MATCHED results
+#   breaks          : count of BREAK results
+#   unmatched       : count of UNMATCHED results
+#   partial         : count of PARTIAL results
+#   totalBreakAmount: sum of all break differences in USD
+#   criticalBreaks  : count of breaks with severity=CRITICAL
+#   highBreaks      : count of breaks with severity=HIGH
+################################################################################
+
+# ── 5.1  Get daily summary for 2026-04-28 ────────────────────────────────────
+
+curl -s "http://localhost:8080/api/v1/recon/summary?reportDate=2026-04-28" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 5.2  Get daily summary for today ─────────────────────────────────────────
+
+curl -s "http://localhost:8080/api/v1/recon/summary?reportDate=2026-04-29" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 5.3  Missing reportDate — should return 400 (test error handling) ─────────
+
+curl -s "http://localhost:8080/api/v1/recon/summary" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 5.4  Invalid date format — should return 400 ─────────────────────────────
+
+curl -s "http://localhost:8080/api/v1/recon/summary?reportDate=29-04-2026" \
+     -H "Accept: application/json" | python -m json.tool
+
+
+################################################################################
+# SECTION 6 — AUDIT HISTORY ENDPOINT
+# GET /api/v1/recon/results/{reconId}/history
+#
+# Returns the full audit trail for a specific reconciliation result.
+# Every time a result is created, resolved, or re-opened — a record is written.
+#
+# Useful for:
+#   - Compliance auditing (who resolved this break and when)
+#   - Debugging (why did this break appear / disappear)
+#   - Regulatory reporting (evidence of review)
+#
+# Response is a list of audit events, each with:
+#   eventType   : CREATED | RESOLVED | REOPENED
+#   matchStatus : the status at time of the event
+#   changedBy   : user or "system"
+#   changedAt   : ISO 8601 timestamp
+#   note        : resolution note if eventType=RESOLVED
+################################################################################
+
+# ── 6.1  Get audit history for a specific result ─────────────────────────────
+# Run this BEFORE resolving a break — you will see only "CREATED" event.
+# Run it AFTER resolving — you will also see a "RESOLVED" event.
+
+curl -s "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000001/history" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 6.2  Get history after resolving (run section 4.1 first) ─────────────────
+
+curl -s "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000003/history" \
+     -H "Accept: application/json" | python -m json.tool
+
+
+################################################################################
+# SECTION 7 — ERROR RESPONSE EXAMPLES
+# All errors follow RFC 9457 Problem Details format:
+# {
+#   "type"    : URI identifying the error type
+#   "title"   : short human-readable summary
+#   "status"  : HTTP status code (integer)
+#   "detail"  : specific detail about this occurrence
+#   "instance": the request URI that caused the error
+# }
+################################################################################
+
+# ── 7.1  404 — recon result not found ─────────────────────────────────────────
+
+curl -s "http://localhost:8080/api/v1/recon/results/INVALID-RECON-ID" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 7.2  404 — file not found ────────────────────────────────────────────────
+
+curl -s "http://localhost:8080/api/v1/files/FILE-DOES-NOT-EXIST/status" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 7.3  400 — missing required query parameter ──────────────────────────────
+# /results requires reportDate, entityId, status, severity
+# Omitting any of them returns 400.
+
+curl -s "http://localhost:8080/api/v1/recon/results?entityId=E001&status=BREAK&severity=HIGH" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 7.4  400 — invalid enum value for status ─────────────────────────────────
+# status must be one of: MATCHED, BREAK, UNMATCHED, PARTIAL
+
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=INVALID&severity=LOW" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 7.5  400 — invalid enum value for sourceSystem ───────────────────────────
+# sourceSystem must be one of: CORE_BANKING, LOANS_SYS, TRADING_GL
+
+curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-28&sourceSystem=INVALID_SYS" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 7.6  400 — invalid date format ───────────────────────────────────────────
+# Date must be ISO format: YYYY-MM-DD
+
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=28/04/2026&entityId=E001&status=MATCHED&severity=LOW" \
+     -H "Accept: application/json" | python -m json.tool
+
+
+################################################################################
+# SECTION 8 — COMPLETE WORKFLOW WALKTHROUGH
+# Follow these requests in order to simulate one full reconciliation day.
+# This is the "happy path" end-to-end sequence.
+################################################################################
+
+# STEP 1 — Confirm the app is healthy before doing anything else
+echo "--- STEP 1: Health Check ---"
+curl -s http://localhost:8080/actuator/health | python -m json.tool
+
+# STEP 2 — Check no files exist yet for today
+echo ""
+echo "--- STEP 2: File Registry (should be empty) ---"
+curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=CORE_BANKING" \
+     -H "Accept: application/json"
+
+# STEP 3 — (Manual) Drop a file into the landing zone
+#   On Linux/Mac:  cp recon-ingestion/src/test/resources/sample/SRCA_RECON_20260428_093000_001.dat data/landing/
+#   On Windows:    copy recon-ingestion\src\test\resources\sample\SRCA_RECON_20260428_093000_001.dat data\landing\
+echo ""
+echo "--- STEP 3: Drop file into data/landing/ ---"
+echo "(Copy the .dat file manually — see comment above)"
+
+# STEP 4 — Wait 5–10 seconds, then check the file was registered
+echo ""
+echo "--- STEP 4: Verify file was registered ---"
+curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-28&sourceSystem=CORE_BANKING" \
+     -H "Accept: application/json" | python -m json.tool
+
+# STEP 5 — Check file status
+echo ""
+echo "--- STEP 5: File processing status ---"
+curl -s "http://localhost:8080/api/v1/files/SRCA_20260428_001/status" \
+     -H "Accept: application/json" | python -m json.tool
+
+# STEP 6 — Get the daily summary to see overall picture
+echo ""
+echo "--- STEP 6: Daily summary ---"
+curl -s "http://localhost:8080/api/v1/recon/summary?reportDate=2026-04-28" \
+     -H "Accept: application/json" | python -m json.tool
+
+# STEP 7 — List all unmatched records (CORE_BANKING arrived but LOANS_SYS hasn't)
+echo ""
+echo "--- STEP 7: UNMATCHED results ---"
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=UNMATCHED&severity=LOW" \
+     -H "Accept: application/json" | python -m json.tool
+
+# STEP 8 — Get details of one specific result
+echo ""
+echo "--- STEP 8: Single result detail ---"
+curl -s "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000001" \
+     -H "Accept: application/json" | python -m json.tool
+
+# STEP 9 — Resolve an unmatched record with an explanation
+echo ""
+echo "--- STEP 9: Resolve the record ---"
+curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000001/resolve" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json" \
+     -d '{"resolutionNote": "LOANS_SYS file for 2026-04-28 not yet received. Expected by 10:00. Will recheck."}' \
+     | python -m json.tool
+
+# STEP 10 — Check the audit trail to confirm resolution was recorded
+echo ""
+echo "--- STEP 10: Audit history (should show CREATED + RESOLVED) ---"
+curl -s "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000001/history" \
+     -H "Accept: application/json" | python -m json.tool
+
+
+################################################################################
+# SECTION 9 — POWERSHELL EQUIVALENTS (for Windows users)
+# Use these if curl is not available or behaves differently on your system.
+################################################################################
+
+# ── 9.1  Health check
+# Invoke-RestMethod http://localhost:8080/actuator/health | ConvertTo-Json -Depth 4
+
+# ── 9.2  List files for a date and source system
+# Invoke-RestMethod "http://localhost:8080/api/v1/files?reportDate=2026-04-28&sourceSystem=CORE_BANKING" | ConvertTo-Json -Depth 4
+
+# ── 9.3  Get single file status
+# Invoke-RestMethod "http://localhost:8080/api/v1/files/SRCA_20260428_001/status" | ConvertTo-Json
+
+# ── 9.4  Reprocess a failed file
+# Invoke-RestMethod -Method Post "http://localhost:8080/api/v1/files/SRCA_20260428_001/reprocess"
+
+# ── 9.5  Get matched results
+# Invoke-RestMethod "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=MATCHED&severity=LOW" | ConvertTo-Json -Depth 5
+
+# ── 9.6  Get break results
+# Invoke-RestMethod "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=BREAK&severity=HIGH" | ConvertTo-Json -Depth 5
+
+# ── 9.7  Get single result
+# Invoke-RestMethod "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000001" | ConvertTo-Json -Depth 3
+
+# ── 9.8  Resolve a break
+# Invoke-RestMethod -Method Patch `
+#   -Uri "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000003/resolve" `
+#   -ContentType "application/json" `
+#   -Body '{"resolutionNote": "Timing difference confirmed with Loans desk."}' `
+#   | ConvertTo-Json
+
+# ── 9.9  Daily summary
+# Invoke-RestMethod "http://localhost:8080/api/v1/recon/summary?reportDate=2026-04-28" | ConvertTo-Json
+
+# ── 9.10  Audit history
+# Invoke-RestMethod "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000001/history" | ConvertTo-Json -Depth 3
+
+
+################################################################################
+# SECTION 10 — SWAGGER UI (no curl needed)
+# Open in browser after starting the application.
+################################################################################
+
+# Swagger UI  (interactive — try any endpoint directly in the browser):
+#   http://localhost:8080/swagger-ui/index.html
+#
+# OpenAPI JSON spec (machine-readable API contract):
+#   http://localhost:8080/v3/api-docs
+#
+# OpenAPI YAML spec:
+#   http://localhost:8080/v3/api-docs.yaml
+
+# ── Download the OpenAPI spec as a file ──────────────────────────────────────
+
+curl -s "http://localhost:8080/v3/api-docs" \
+     -H "Accept: application/json" > openapi-spec.json
+
+curl -s "http://localhost:8080/v3/api-docs.yaml" > openapi-spec.yaml
+
+
+################################################################################
+# VALID ENUM VALUES — QUICK REFERENCE
+#
+# sourceSystem  : CORE_BANKING | LOANS_SYS | TRADING_GL
+# status        : MATCHED | BREAK | UNMATCHED | PARTIAL
+# severity      : LOW | MEDIUM | HIGH | CRITICAL
+#
+# FILE NAMING CONVENTION (determines sourceSystem automatically):
+#   SRCA_*  → CORE_BANKING
+#   SRCB_*  → LOANS_SYS
+#   SRCC_*  → TRADING_GL
+#
+# RECON ID FORMAT:
+#   {fileId}-{recordId}
+#   e.g.  SRCA_20260428_001-SRCA000001
+#         └── from HDR line  └── from DTL line
+#
+# SAMPLE FILE LOCATIONS (for testing):
+#   Normal file   : recon-ingestion/src/test/resources/sample/SRCA_RECON_20260428_093000_001.dat
+#   Bad totals    : recon-ingestion/src/test/resources/sample/SRCA_RECON_BAD_TOTAL.dat
+#   Malformed     : recon-ingestion/src/test/resources/sample/SRCA_RECON_MALFORMED.dat
+#   CSV format    : recon-ingestion/src/test/resources/sample/sample.csv
+#   Fixed-width   : recon-ingestion/src/test/resources/sample/sample_legacy.txt
+################################################################################
+

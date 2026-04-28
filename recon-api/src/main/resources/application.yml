@@ -17,7 +17,8 @@ spring:
       connection-timeout: 30000
   jpa:
     hibernate:
-      ddl-auto: validate
+      ddl-auto: none
+    open-in-view: false
     properties:
       hibernate:
         jdbc:
@@ -35,12 +36,11 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
-    baseline-on-migrate: true
 
 recon:
   landing-zone:
     mode: local
-    path: ${LANDING_ZONE_PATH:/data/landing}
+    path: ${LANDING_ZONE_PATH:data/landing}
     poll-interval-ms: 5000
   kafka:
     topics:
