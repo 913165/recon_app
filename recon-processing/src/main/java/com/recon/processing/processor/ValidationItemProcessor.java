@@ -21,7 +21,13 @@ import java.util.regex.Pattern;
 @Slf4j
 public class ValidationItemProcessor {
 
-    private static final Pattern RCON_PATTERN = Pattern.compile("^RCON\\d{4}$");
+    /**
+     * RCON code patterns accepted:
+     *  - Legacy format  : RCON followed by 4 digits   e.g. RCON0010
+     *  - Indian payment : RECON_{CHANNEL}_{TYPE}       e.g. RECON_UPI_CR, RECON_NEFT_DR, RECON_RTGS_REJ
+     */
+    private static final Pattern RCON_PATTERN =
+            Pattern.compile("^(RCON\\d{4}|RECON_(UPI|IMPS|NEFT|RTGS)_(CR|DR|REV|CHB|RET|REJ))$");
     private final BloomFilter<CharSequence> dupFilter =
             BloomFilter.create(Funnels.stringFunnel(StandardCharsets.UTF_8), 5_000_000);
 

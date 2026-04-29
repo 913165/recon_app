@@ -21,22 +21,21 @@ class ValidationItemProcessorTest {
     void validRecordPasses() {
         ReconStaging row = baseRow();
         var validated = processor.process(row);
-        assertEquals("RCON0010", validated.rconCode());
+        assertEquals("RECON_UPI_CR", validated.rconCode());
     }
 
 
     @Test
     void nullRconCodeFails() {
-        // Create a row without setting rconCode (stays null via no-arg constructor)
         ReconStaging row = new ReconStaging();
-        row.setFileId("F1");
-        row.setSourceSystem(SourceSystem.CORE_BANKING);
-        row.setRecordId("REC-NULL");
+        row.setFileId("UPI_20260429_001");
+        row.setSourceSystem(SourceSystem.UPI);
+        row.setRecordId("UPI-NULL");
         row.setReportDate(LocalDate.now());
-        row.setEntityId("E001");
+        row.setEntityId("HDFC0001");
         row.setBalance(BigDecimal.TEN);
-        row.setDrCrInd(DrCrIndicator.DR);
-        row.setCurrency("USD");
+        row.setDrCrInd(DrCrIndicator.CR);
+        row.setCurrency("INR");
         // rconCode intentionally left null
         assertThrows(ValidationException.class, () -> processor.process(row));
     }
@@ -44,11 +43,10 @@ class ValidationItemProcessorTest {
     @Test
     void duplicateRecordIdFails() {
         ReconStaging row = baseRow();
-        row.setRecordId("REC-DUP");
+        row.setRecordId("UPI-DUP-001");
         processor.process(row);
-        // Second call with same record ID should be flagged as duplicate
         ReconStaging dup = baseRow();
-        dup.setRecordId("REC-DUP");
+        dup.setRecordId("UPI-DUP-001");
         assertThrows(ValidationException.class, () -> processor.process(dup));
     }
 
@@ -61,15 +59,15 @@ class ValidationItemProcessorTest {
 
     private ReconStaging baseRow() {
         ReconStaging row = new ReconStaging();
-        row.setFileId("F1");
-        row.setSourceSystem(SourceSystem.CORE_BANKING);
-        row.setRecordId("REC1");
-        row.setReportDate(LocalDate.now());
-        row.setEntityId("E001");
-        row.setRconCode("RCON0010");
-        row.setBalance(BigDecimal.TEN);
-        row.setDrCrInd(DrCrIndicator.DR);
-        row.setCurrency("USD");
+        row.setFileId("UPI_20260429_001");
+        row.setSourceSystem(SourceSystem.UPI);
+        row.setRecordId("UPI000001");
+        row.setReportDate(LocalDate.of(2026, 4, 29));
+        row.setEntityId("HDFC0001");
+        row.setRconCode("RECON_UPI_CR");
+        row.setBalance(BigDecimal.valueOf(15_000_000));
+        row.setDrCrInd(DrCrIndicator.CR);
+        row.setCurrency("INR");
         return row;
     }
 }

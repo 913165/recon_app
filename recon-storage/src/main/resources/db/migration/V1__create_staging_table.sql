@@ -8,7 +8,7 @@ CREATE TABLE recon_staging (
     entity_name       VARCHAR(100),
     account_code      VARCHAR(15)    NOT NULL,
     account_desc      VARCHAR(100),
-    rcon_code         VARCHAR(10)    NOT NULL,
+    rcon_code         VARCHAR(30)    NOT NULL,
     balance           NUMERIC(20,2)  NOT NULL,
     dr_cr_ind         CHAR(2)        NOT NULL,
     currency          CHAR(3)        NOT NULL DEFAULT 'USD',

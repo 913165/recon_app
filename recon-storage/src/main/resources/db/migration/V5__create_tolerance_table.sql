@@ -1,6 +1,6 @@
 CREATE TABLE rcon_tolerance_config (
     id         BIGSERIAL PRIMARY KEY,
-    rcon_code  VARCHAR(10) NOT NULL UNIQUE,
+    rcon_code  VARCHAR(30) NOT NULL UNIQUE,
     tolerance  NUMERIC(10,2) NOT NULL DEFAULT 0.00
 );
 

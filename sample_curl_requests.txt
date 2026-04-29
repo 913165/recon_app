@@ -116,25 +116,27 @@ curl -s "http://localhost:8080/actuator/metrics/http.server.requests" | python -
 # These endpoints track every flat file received by the system.
 ################################################################################
 
-# ── 2.1  List all files processed on a specific date for CORE_BANKING ────────
+# ── 2.1  List all UPI files processed on a specific date ─────────────────────
 # Required params:
 #   reportDate   = business date of the file (YYYY-MM-DD)
-#   sourceSystem = CORE_BANKING | LOANS_SYS | TRADING_GL
-#
-# Returns a JSON array. Empty array [] means no files received yet.
-# Try this AFTER dropping a .dat file in data/landing/
+#   sourceSystem = UPI | IMPS | NEFT | RTGS
 
-curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-28&sourceSystem=CORE_BANKING" \
+curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=UPI" \
      -H "Accept: application/json" | python -m json.tool
 
-# ── 2.2  List files for LOANS_SYS ────────────────────────────────────────────
+# ── 2.2  List files for IMPS ────────────────────────────────────────────────
 
-curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-28&sourceSystem=LOANS_SYS" \
+curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=IMPS" \
      -H "Accept: application/json" | python -m json.tool
 
-# ── 2.3  List files for TRADING_GL ───────────────────────────────────────────
+# ── 2.3  List files for NEFT ─────────────────────────────────────────────────
 
-curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-28&sourceSystem=TRADING_GL" \
+curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=NEFT" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 2.4  List files for RTGS ─────────────────────────────────────────────────
+
+curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=RTGS" \
      -H "Accept: application/json" | python -m json.tool
 
 # ── 2.4  Get processing status of a specific file by fileId ──────────────────
@@ -188,69 +190,64 @@ curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=C
 ################################################################################
 
 # ── 3.1  Get all MATCHED results (clean records) ──────────────────────────────
-# These are the healthy records — both sides agreed.
-# Useful for confirming how many records reconciled cleanly.
+# entityId: HDFC0001 (HDFC Bank entity in sample files)
 
-curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=MATCHED&severity=LOW" \
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-29&entityId=HDFC0001&status=MATCHED&severity=LOW" \
      -H "Accept: application/json" \
      -H "API-Version: 1" | python -m json.tool
 
-# ── 3.2  Get BREAK results — these need investigation ────────────────────────
-# BREAKs are the primary output operations teams work through each day.
-# Shows records where balance_a != balance_b (beyond tolerance).
+# ── 3.2  Get BREAK results — these need investigation ─────────────────────────
+# BREAK = difference between NPCI/RBI switch and bank CBS exceeds tolerance
+# For NEFT/RTGS/IMPS tolerance is ₹0 — any difference is a BREAK
+# For UPI tolerance is ₹1 (paise rounding)
 
-curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=BREAK&severity=HIGH" \
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-29&entityId=HDFC0001&status=BREAK&severity=HIGH" \
      -H "Accept: application/json" | python -m json.tool
 
-# ── 3.3  Get CRITICAL BREAKs (difference >= $100,000) ────────────────────────
-# CRITICAL breaks trigger automatic Slack notifications and JIRA tickets.
-# These should be investigated first every morning.
+# ── 3.3  Get CRITICAL BREAKs (difference >= ₹1,00,00,000 = ₹1 Crore) ────────
+# CRITICAL breaks trigger automatic Slack + JIRA ticket creation.
+# For RTGS these are the most dangerous — high-value gross settlement errors.
 
-curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=BREAK&severity=CRITICAL" \
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-29&entityId=HDFC0001&status=BREAK&severity=CRITICAL" \
      -H "Accept: application/json" | python -m json.tool
 
 # ── 3.4  Get MEDIUM severity BREAKs ──────────────────────────────────────────
 
-curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=BREAK&severity=MEDIUM" \
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-29&entityId=HDFC0001&status=BREAK&severity=MEDIUM" \
      -H "Accept: application/json" | python -m json.tool
 
-# ── 3.5  Get UNMATCHED results — record in one source only ───────────────────
-# UNMATCHED = CORE_BANKING has a record but LOANS_SYS has nothing for it (or vice versa).
-# Common cause: file from one system not yet received.
+# ── 3.5  Get UNMATCHED results — UPI file arrived but counterpart missing ─────
+# Common cause: NPCI UPI switch file arrived but bank CBS extract not yet sent.
 
-curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=UNMATCHED&severity=LOW" \
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-29&entityId=HDFC0001&status=UNMATCHED&severity=LOW" \
      -H "Accept: application/json" | python -m json.tool
 
-# ── 3.6  Get PARTIAL results — one whole source missing ──────────────────────
-# PARTIAL = we have records from LOANS_SYS but CORE_BANKING sent nothing at all.
-# Different from UNMATCHED — here a whole source system went silent.
+# ── 3.6  Get PARTIAL results — entire source system missing ───────────────────
+# PARTIAL = NEFT RBI batch file received but bank CBS sent no NEFT records at all.
 
-curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=PARTIAL&severity=HIGH" \
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-29&entityId=HDFC0001&status=PARTIAL&severity=HIGH" \
      -H "Accept: application/json" | python -m json.tool
 
-# ── 3.7  Get results with pagination — page 0, 10 records per page ────────────
-# Use when you have many results and need to page through them.
-# Response includes: totalElements, totalPages, number (current page), size.
+# ── 3.7  Get results with pagination ─────────────────────────────────────────
 
-curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=MATCHED&severity=LOW&page=0&size=10" \
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-29&entityId=HDFC0001&status=MATCHED&severity=LOW&page=0&size=10" \
      -H "Accept: application/json" | python -m json.tool
 
-# ── 3.8  Get results — page 1 (second page) ──────────────────────────────────
+# ── 3.8  Get results — page 1 ────────────────────────────────────────────────
 
-curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=MATCHED&severity=LOW&page=1&size=10" \
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-29&entityId=HDFC0001&status=MATCHED&severity=LOW&page=1&size=10" \
      -H "Accept: application/json" | python -m json.tool
 
 # ── 3.9  Get a SINGLE result by reconId ──────────────────────────────────────
-# reconId format: {fileId}-{recordId}
-# e.g. SRCA_20260428_001-SRCA000001
-# Get the reconId from the results list above (field "reconId" in each item).
+# reconId format: RCON-{entityId}-{reportDate}-{rconCode}
+# e.g.  RCON-HDFC0001-20260429-RECON_UPI_CR
 
-curl -s "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000001" \
+curl -s "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_UPI_CR" \
      -H "Accept: application/json" | python -m json.tool
 
-# ── 3.10  Get another single result (RCON code RCON0071) ─────────────────────
+# ── 3.10  Get RTGS result ─────────────────────────────────────────────────────
 
-curl -s "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000002" \
+curl -s "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_RTGS_CR" \
      -H "Accept: application/json" | python -m json.tool
 
 # ── 3.11  404 — result not found (expected error, good for testing) ───────────
@@ -268,50 +265,59 @@ curl -s "http://localhost:8080/api/v1/recon/results/DOES-NOT-EXIST" \
 # Called by an operations analyst after investigating a break and determining
 # the cause. Records the resolution note and marks the break as resolved=true.
 #
-# Request body:
-#   { "resolutionNote": "Explanation of why the break occurred" }
-#
-# resolutionNote is REQUIRED and must not be blank (enforced by @Valid).
+# Common Indian payment break scenarios:
+#   UPI  — paise rounding (within ₹1 tolerance)
+#   IMPS — return entry posted in next settlement window
+#   NEFT — batch timing lag (CBS posted after RBI cut-off)
+#   RTGS — rejected transaction (beneficiary account frozen)
 ################################################################################
 
-# ── 4.1  Resolve a break — timing difference explanation ─────────────────────
-# Replace the reconId with an actual BREAK reconId from your results.
+# ── 4.1  Resolve a UPI paise rounding break ──────────────────────────────────
 
-curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000003/resolve" \
+curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_UPI_CR/resolve" \
      -H "Content-Type: application/json" \
      -H "Accept: application/json" \
-     -d '{"resolutionNote": "Timing difference — loan disbursement posted after CORE_BANKING cut-off at 17:00. Confirmed with Loans Operations desk on 2026-04-29."}' \
+     -d '{"resolutionNote": "UPI paise rounding difference of Rs.0.50 on credit batch NPCI_20260429. Within Rs.1 NPCI accepted tolerance. Waived per Ops Manager approval #UPI-OPS-2026-0429-001."}' \
      | python -m json.tool
 
-# ── 4.2  Resolve a break — system error explanation ──────────────────────────
+# ── 4.2  Resolve a NEFT timing difference break ──────────────────────────────
+# Common cause: NEFT 16:00 batch posted to CBS at 16:32 (after RBI cut-off).
 
-curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000004/resolve" \
+curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_NEFT_DR/resolve" \
      -H "Content-Type: application/json" \
      -H "Accept: application/json" \
-     -d '{"resolutionNote": "Deposit system rounding difference of $0.50 — within acceptable tolerance. Waived per ops manager approval #OPS-2026-0429."}' \
+     -d '{"resolutionNote": "NEFT batch 3 outward debits posted to CBS at 16:32 after 16:00 RBI cut-off. Difference Rs.9,25,00,000 will auto-clear in next NEFT cycle. No financial exposure."}' \
      | python -m json.tool
 
-# ── 4.3  Resolve a break — known upstream feed issue ─────────────────────────
+# ── 4.3  Resolve an RTGS rejection ───────────────────────────────────────────
+# RTGS transaction rejected by RBI — beneficiary account frozen.
 
-curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000005/resolve" \
+curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_RTGS_REJ/resolve" \
      -H "Content-Type: application/json" \
      -H "Accept: application/json" \
-     -d '{"resolutionNote": "TRADING_GL feed delayed — security was not valued until T+1. Will auto-resolve in next day recon cycle."}' \
+     -d '{"resolutionNote": "RTGS UTR HDFC29042600004 rejected — beneficiary account frozen per RBI circular. Amount Rs.0. No financial impact. JIRA: RTGS-2026-0429-001 closed."}' \
      | python -m json.tool
 
-# ── 4.4  Validation error — empty resolutionNote (expected 400) ───────────────
-# resolutionNote is required. This returns HTTP 400 Bad Request.
-# Response: { "status": 400, "title": "Validation Failed", "detail": "..." }
+# ── 4.4  Resolve an IMPS return ──────────────────────────────────────────────
 
-curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000003/resolve" \
+curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_IMPS_RET/resolve" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json" \
+     -d '{"resolutionNote": "IMPS return MMID:9129876543 — beneficiary account closed. Return Rs.18,00,000 posted in next settlement window (T+1). Confirmed with NPCI helpdesk ticket #IMPS-87654."}' \
+     | python -m json.tool
+
+# ── 4.5  Validation error — empty resolutionNote (expected 400) ──────────────
+# resolutionNote is required. Returns HTTP 400 Bad Request.
+
+curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_UPI_CR/resolve" \
      -H "Content-Type: application/json" \
      -H "Accept: application/json" \
      -d '{"resolutionNote": ""}' \
      | python -m json.tool
 
-# ── 4.5  Missing request body (expected 400) ─────────────────────────────────
+# ── 4.6  Missing request body (expected 400) ─────────────────────────────────
 
-curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000003/resolve" \
+curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_UPI_DR/resolve" \
      -H "Content-Type: application/json" \
      -H "Accept: application/json" \
      | python -m json.tool
@@ -337,14 +343,14 @@ curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-S
 #   highBreaks      : count of breaks with severity=HIGH
 ################################################################################
 
-# ── 5.1  Get daily summary for 2026-04-28 ────────────────────────────────────
-
-curl -s "http://localhost:8080/api/v1/recon/summary?reportDate=2026-04-28" \
-     -H "Accept: application/json" | python -m json.tool
-
-# ── 5.2  Get daily summary for today ─────────────────────────────────────────
+# ── 5.1  Get daily summary for 2026-04-29 (Indian payment channels) ──────────
 
 curl -s "http://localhost:8080/api/v1/recon/summary?reportDate=2026-04-29" \
+     -H "Accept: application/json" | python -m json.tool
+
+# ── 5.2  Get daily summary for a previous date ───────────────────────────────
+
+curl -s "http://localhost:8080/api/v1/recon/summary?reportDate=2026-04-28" \
      -H "Accept: application/json" | python -m json.tool
 
 # ── 5.3  Missing reportDate — should return 400 (test error handling) ─────────
@@ -382,12 +388,12 @@ curl -s "http://localhost:8080/api/v1/recon/summary?reportDate=29-04-2026" \
 # Run this BEFORE resolving a break — you will see only "CREATED" event.
 # Run it AFTER resolving — you will also see a "RESOLVED" event.
 
-curl -s "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000001/history" \
+curl -s "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_UPI_CR/history" \
      -H "Accept: application/json" | python -m json.tool
 
 # ── 6.2  Get history after resolving (run section 4.1 first) ─────────────────
 
-curl -s "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000003/history" \
+curl -s "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_NEFT_DR/history" \
      -H "Accept: application/json" | python -m json.tool
 
 
@@ -427,9 +433,9 @@ curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entity
      -H "Accept: application/json" | python -m json.tool
 
 # ── 7.5  400 — invalid enum value for sourceSystem ───────────────────────────
-# sourceSystem must be one of: CORE_BANKING, LOANS_SYS, TRADING_GL
+# sourceSystem must be one of: UPI | IMPS | NEFT | RTGS
 
-curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-28&sourceSystem=INVALID_SYS" \
+curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=INVALID_SYS" \
      -H "Accept: application/json" | python -m json.tool
 
 # ── 7.6  400 — invalid date format ───────────────────────────────────────────
@@ -440,158 +446,171 @@ curl -s "http://localhost:8080/api/v1/recon/results?reportDate=28/04/2026&entity
 
 
 ################################################################################
-# SECTION 8 — COMPLETE WORKFLOW WALKTHROUGH
+# SECTION 8 — COMPLETE INDIAN PAYMENT WORKFLOW WALKTHROUGH
 # Follow these requests in order to simulate one full reconciliation day.
-# This is the "happy path" end-to-end sequence.
+# Uses UPI + IMPS channels (NPCI real-time) as the primary example.
 ################################################################################
 
-# STEP 1 — Confirm the app is healthy before doing anything else
+# STEP 1 — Confirm the app is healthy
 echo "--- STEP 1: Health Check ---"
 curl -s http://localhost:8080/actuator/health | python -m json.tool
 
-# STEP 2 — Check no files exist yet for today
+# STEP 2 — Check no files exist yet for today's UPI channel
 echo ""
-echo "--- STEP 2: File Registry (should be empty) ---"
-curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=CORE_BANKING" \
+echo "--- STEP 2: File Registry for UPI (should be empty) ---"
+curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=UPI" \
      -H "Accept: application/json"
 
-# STEP 3 — (Manual) Drop a file into the landing zone
-#   On Linux/Mac:  cp recon-ingestion/src/test/resources/sample/SRCA_RECON_20260428_093000_001.dat data/landing/
-#   On Windows:    copy recon-ingestion\src\test\resources\sample\SRCA_RECON_20260428_093000_001.dat data\landing\
+# STEP 3 — (Manual) Drop UPI file into landing zone
+#   Windows:  copy recon-ingestion\src\test\resources\sample\UPI_RECON_20260429_093000_001.dat data\landing\
+#   Linux/Mac: cp recon-ingestion/src/test/resources/sample/UPI_RECON_20260429_093000_001.dat data/landing/
 echo ""
-echo "--- STEP 3: Drop file into data/landing/ ---"
-echo "(Copy the .dat file manually — see comment above)"
+echo "--- STEP 3: Drop UPI .dat file into data/landing/ ---"
+echo "(Copy the file manually — see comment above)"
 
-# STEP 4 — Wait 5–10 seconds, then check the file was registered
+# STEP 4 — Wait 5–10 seconds, verify file was registered
 echo ""
-echo "--- STEP 4: Verify file was registered ---"
-curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-28&sourceSystem=CORE_BANKING" \
+echo "--- STEP 4: Verify UPI file was registered ---"
+curl -s "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=UPI" \
      -H "Accept: application/json" | python -m json.tool
 
-# STEP 5 — Check file status
+# STEP 5 — Drop remaining channels
+#   copy recon-ingestion\src\test\resources\sample\IMPS_RECON_20260429_090000_001.dat data\landing\
+#   copy recon-ingestion\src\test\resources\sample\NEFT_RECON_20260429_120000_001.csv  data\landing\
+#   copy recon-ingestion\src\test\resources\sample\RTGS_RECON_20260429_110000_001.dat data\landing\
 echo ""
-echo "--- STEP 5: File processing status ---"
-curl -s "http://localhost:8080/api/v1/files/SRCA_20260428_001/status" \
+echo "--- STEP 5: Drop IMPS, NEFT, RTGS files ---"
+
+# STEP 6 — Get daily summary
+echo ""
+echo "--- STEP 6: Daily summary (all channels combined) ---"
+curl -s "http://localhost:8080/api/v1/recon/summary?reportDate=2026-04-29" \
      -H "Accept: application/json" | python -m json.tool
 
-# STEP 6 — Get the daily summary to see overall picture
+# STEP 7 — List all UPI results
 echo ""
-echo "--- STEP 6: Daily summary ---"
-curl -s "http://localhost:8080/api/v1/recon/summary?reportDate=2026-04-28" \
+echo "--- STEP 7: UPI matched results ---"
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-29&entityId=HDFC0001&status=MATCHED&severity=LOW" \
      -H "Accept: application/json" | python -m json.tool
 
-# STEP 7 — List all unmatched records (CORE_BANKING arrived but LOANS_SYS hasn't)
+# STEP 8 — Check for any NEFT/RTGS breaks (zero tolerance channels)
 echo ""
-echo "--- STEP 7: UNMATCHED results ---"
-curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=UNMATCHED&severity=LOW" \
+echo "--- STEP 8: BREAK results ---"
+curl -s "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-29&entityId=HDFC0001&status=BREAK&severity=HIGH" \
      -H "Accept: application/json" | python -m json.tool
 
-# STEP 8 — Get details of one specific result
+# STEP 9 — Resolve a UPI paise rounding break
 echo ""
-echo "--- STEP 8: Single result detail ---"
-curl -s "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000001" \
-     -H "Accept: application/json" | python -m json.tool
-
-# STEP 9 — Resolve an unmatched record with an explanation
-echo ""
-echo "--- STEP 9: Resolve the record ---"
-curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000001/resolve" \
+echo "--- STEP 9: Resolve UPI credit break ---"
+curl -s -X PATCH "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_UPI_CR/resolve" \
      -H "Content-Type: application/json" \
      -H "Accept: application/json" \
-     -d '{"resolutionNote": "LOANS_SYS file for 2026-04-28 not yet received. Expected by 10:00. Will recheck."}' \
+     -d '{"resolutionNote": "UPI paise rounding Rs.0.50 — within NPCI Rs.1 tolerance. Waived #UPI-OPS-2026-0429."}' \
      | python -m json.tool
 
-# STEP 10 — Check the audit trail to confirm resolution was recorded
+# STEP 10 — Verify audit trail shows CREATED + RESOLVED events
 echo ""
-echo "--- STEP 10: Audit history (should show CREATED + RESOLVED) ---"
-curl -s "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000001/history" \
+echo "--- STEP 10: Audit trail ---"
+curl -s "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_UPI_CR/history" \
      -H "Accept: application/json" | python -m json.tool
 
 
 ################################################################################
 # SECTION 9 — POWERSHELL EQUIVALENTS (for Windows users)
-# Use these if curl is not available or behaves differently on your system.
 ################################################################################
 
 # ── 9.1  Health check
 # Invoke-RestMethod http://localhost:8080/actuator/health | ConvertTo-Json -Depth 4
 
-# ── 9.2  List files for a date and source system
-# Invoke-RestMethod "http://localhost:8080/api/v1/files?reportDate=2026-04-28&sourceSystem=CORE_BANKING" | ConvertTo-Json -Depth 4
+# ── 9.2  List UPI files
+# Invoke-RestMethod "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=UPI" | ConvertTo-Json -Depth 4
 
-# ── 9.3  Get single file status
-# Invoke-RestMethod "http://localhost:8080/api/v1/files/SRCA_20260428_001/status" | ConvertTo-Json
+# ── 9.3  List NEFT files
+# Invoke-RestMethod "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=NEFT" | ConvertTo-Json -Depth 4
 
-# ── 9.4  Reprocess a failed file
-# Invoke-RestMethod -Method Post "http://localhost:8080/api/v1/files/SRCA_20260428_001/reprocess"
+# ── 9.4  List all channels at once
+# @("UPI","IMPS","NEFT","RTGS") | ForEach-Object { Write-Host "--- $_ ---"; Invoke-RestMethod "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=$_" | ConvertTo-Json }
 
-# ── 9.5  Get matched results
-# Invoke-RestMethod "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=MATCHED&severity=LOW" | ConvertTo-Json -Depth 5
+# ── 9.5  Get matched results (INR entity)
+# Invoke-RestMethod "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-29&entityId=HDFC0001&status=MATCHED&severity=LOW" | ConvertTo-Json -Depth 5
 
 # ── 9.6  Get break results
-# Invoke-RestMethod "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=BREAK&severity=HIGH" | ConvertTo-Json -Depth 5
+# Invoke-RestMethod "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-29&entityId=HDFC0001&status=BREAK&severity=HIGH" | ConvertTo-Json -Depth 5
 
-# ── 9.7  Get single result
-# Invoke-RestMethod "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000001" | ConvertTo-Json -Depth 3
+# ── 9.7  Get single result (UPI credit)
+# Invoke-RestMethod "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_UPI_CR" | ConvertTo-Json -Depth 3
 
-# ── 9.8  Resolve a break
+# ── 9.8  Resolve UPI paise rounding break
 # Invoke-RestMethod -Method Patch `
-#   -Uri "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000003/resolve" `
+#   -Uri "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_UPI_CR/resolve" `
 #   -ContentType "application/json" `
-#   -Body '{"resolutionNote": "Timing difference confirmed with Loans desk."}' `
+#   -Body '{"resolutionNote": "UPI paise rounding Rs.0.50 within NPCI tolerance. Waived."}' `
 #   | ConvertTo-Json
 
-# ── 9.9  Daily summary
-# Invoke-RestMethod "http://localhost:8080/api/v1/recon/summary?reportDate=2026-04-28" | ConvertTo-Json
+# ── 9.9  Resolve NEFT timing difference
+# Invoke-RestMethod -Method Patch `
+#   -Uri "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_NEFT_DR/resolve" `
+#   -ContentType "application/json" `
+#   -Body '{"resolutionNote": "NEFT batch timing lag. Will auto-clear next cycle."}' `
+#   | ConvertTo-Json
 
-# ── 9.10  Audit history
-# Invoke-RestMethod "http://localhost:8080/api/v1/recon/results/SRCA_20260428_001-SRCA000001/history" | ConvertTo-Json -Depth 3
+# ── 9.10  Daily summary
+# Invoke-RestMethod "http://localhost:8080/api/v1/recon/summary?reportDate=2026-04-29" | ConvertTo-Json
+
+# ── 9.11  Audit history
+# Invoke-RestMethod "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_UPI_CR/history" | ConvertTo-Json -Depth 3
 
 
 ################################################################################
 # SECTION 10 — SWAGGER UI (no curl needed)
-# Open in browser after starting the application.
 ################################################################################
 
 # Swagger UI  (interactive — try any endpoint directly in the browser):
 #   http://localhost:8080/swagger-ui/index.html
 #
-# OpenAPI JSON spec (machine-readable API contract):
+# OpenAPI JSON spec:
 #   http://localhost:8080/v3/api-docs
 #
 # OpenAPI YAML spec:
 #   http://localhost:8080/v3/api-docs.yaml
 
-# ── Download the OpenAPI spec as a file ──────────────────────────────────────
-
-curl -s "http://localhost:8080/v3/api-docs" \
-     -H "Accept: application/json" > openapi-spec.json
-
+curl -s "http://localhost:8080/v3/api-docs" -H "Accept: application/json" > openapi-spec.json
 curl -s "http://localhost:8080/v3/api-docs.yaml" > openapi-spec.yaml
 
 
 ################################################################################
-# VALID ENUM VALUES — QUICK REFERENCE
+# VALID ENUM VALUES — QUICK REFERENCE (INDIAN PAYMENTS)
 #
-# sourceSystem  : CORE_BANKING | LOANS_SYS | TRADING_GL
+# sourceSystem  : UPI | IMPS | NEFT | RTGS
 # status        : MATCHED | BREAK | UNMATCHED | PARTIAL
 # severity      : LOW | MEDIUM | HIGH | CRITICAL
+# currency      : INR  (Indian Rupee — all sample files use INR)
+# entityId      : HDFC0001  (HDFC Bank entity in all sample files)
 #
 # FILE NAMING CONVENTION (determines sourceSystem automatically):
-#   SRCA_*  → CORE_BANKING
-#   SRCB_*  → LOANS_SYS
-#   SRCC_*  → TRADING_GL
+#   UPI_*   → UPI   (NPCI UPI switch reconciliation  — .dat pipe-delimited)
+#   IMPS_*  → IMPS  (NPCI IMPS settlement file        — .dat pipe-delimited)
+#   NEFT_*  → NEFT  (RBI NEFT batch settlement report — .csv comma-separated)
+#   RTGS_*  → RTGS  (RBI RTGS gross settlement file   — .dat pipe-delimited)
 #
 # RECON ID FORMAT:
-#   {fileId}-{recordId}
-#   e.g.  SRCA_20260428_001-SRCA000001
-#         └── from HDR line  └── from DTL line
+#   RCON-{entityId}-{reportDate}-{rconCode}
+#   e.g.  RCON-HDFC0001-20260429-RECON_UPI_CR
+#         RCON-HDFC0001-20260429-RECON_NEFT_DR
+#         RCON-HDFC0001-20260429-RECON_RTGS_CR
 #
-# SAMPLE FILE LOCATIONS (for testing):
-#   Normal file   : recon-ingestion/src/test/resources/sample/SRCA_RECON_20260428_093000_001.dat
-#   Bad totals    : recon-ingestion/src/test/resources/sample/SRCA_RECON_BAD_TOTAL.dat
-#   Malformed     : recon-ingestion/src/test/resources/sample/SRCA_RECON_MALFORMED.dat
-#   CSV format    : recon-ingestion/src/test/resources/sample/sample.csv
-#   Fixed-width   : recon-ingestion/src/test/resources/sample/sample_legacy.txt
+# INDIAN PAYMENT RCON CODES:
+#   UPI:  RECON_UPI_CR (tol Rs.1) | RECON_UPI_DR (tol Rs.1) | RECON_UPI_REV (tol Rs.0) | RECON_UPI_CHB (tol Rs.0)
+#   IMPS: RECON_IMPS_CR | RECON_IMPS_DR | RECON_IMPS_RET        (all tol Rs.0 — exact)
+#   NEFT: RECON_NEFT_CR | RECON_NEFT_DR | RECON_NEFT_RET        (all tol Rs.0 — exact)
+#   RTGS: RECON_RTGS_CR | RECON_RTGS_DR | RECON_RTGS_REJ        (all tol Rs.0 — exact)
+#
+# SAMPLE FILE LOCATIONS:
+#   UPI   : recon-ingestion/src/test/resources/sample/UPI_RECON_20260429_093000_001.dat
+#   IMPS  : recon-ingestion/src/test/resources/sample/IMPS_RECON_20260429_090000_001.dat
+#   NEFT  : recon-ingestion/src/test/resources/sample/NEFT_RECON_20260429_120000_001.csv
+#   RTGS  : recon-ingestion/src/test/resources/sample/RTGS_RECON_20260429_110000_001.dat
+#   Bad totals  : recon-ingestion/src/test/resources/sample/SRCA_RECON_BAD_TOTAL.dat
+#   Malformed   : recon-ingestion/src/test/resources/sample/SRCA_RECON_MALFORMED.dat
 ################################################################################
 

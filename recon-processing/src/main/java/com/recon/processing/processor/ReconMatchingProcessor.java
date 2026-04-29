@@ -3,7 +3,6 @@ package com.recon.processing.processor;
 import com.recon.common.dto.ValidatedRecord;
 import com.recon.common.enums.MatchStatus;
 import com.recon.common.enums.Severity;
-import com.recon.common.enums.SourceSystem;
 import com.recon.storage.entity.ReconResult;
 import com.recon.storage.repository.RconToleranceConfigRepository;
 import lombok.RequiredArgsConstructor;
@@ -51,27 +50,41 @@ public class ReconMatchingProcessor {
         }
     }
 
+    /**
+     * Indian Payment Matching Logic
+     * ─────────────────────────────
+     * Each payment channel reconciles its NPCI/RBI switch record (side A)
+     * against the bank's own CBS (Core Banking System) record (side B).
+     *
+     * Matching pairs by payment type:
+     *   UPI  → NPCI UPI Switch  vs  bank CBS settlement
+     *   IMPS → NPCI IMPS Switch vs  bank CBS settlement
+     *   NEFT → RBI NEFT batch   vs  bank CBS settlement
+     *   RTGS → RBI RTGS gross   vs  bank CBS settlement
+     *
+     * Within a group (same date + entityId + rconCode):
+     *   - First record found = baseline (switch/NPCI/RBI side)
+     *   - Second record      = counterpart (bank CBS side)
+     *   - Only one record    = UNMATCHED or PARTIAL
+     */
     private ReconResult matchGroup(List<ValidatedRecord> group) {
-        ValidatedRecord srcA = group.stream().filter(r -> r.sourceSystem() == SourceSystem.CORE_BANKING).findFirst().orElse(null);
-        ValidatedRecord srcB = group.stream().filter(r -> r.sourceSystem() == SourceSystem.LOANS_SYS).findFirst().orElse(null);
-        ValidatedRecord srcC = group.stream().filter(r -> r.sourceSystem() == SourceSystem.TRADING_GL).findFirst().orElse(null);
+        // For Indian payments we always take the first record as baseline (switch side)
+        // and the second as counterpart (bank CBS side).
+        // If only one source system is present in the group it means the counterpart
+        // file has not yet arrived → UNMATCHED / PARTIAL.
+        ValidatedRecord baseline = group.stream()
+                .min(java.util.Comparator.comparing(r -> r.sourceSystem().name()))
+                .orElseThrow(() -> new IllegalStateException("Cannot match empty group"));
 
-        ValidatedRecord baseline = srcA != null ? srcA : (srcB != null ? srcB : srcC);
-        if (baseline == null) {
-            throw new IllegalStateException("Cannot match empty group");
-        }
+        ValidatedRecord counterpart = group.stream()
+                .filter(r -> r.sourceSystem() != baseline.sourceSystem())
+                .findFirst()
+                .orElse(null);
 
         BigDecimal tolerance = toleranceConfigRepository.findByRconCode(baseline.rconCode())
                 .map(config -> config.getTolerance())
                 .orElse(BigDecimal.ZERO);
 
-        // Counterpart: something other than the baseline source
-        ValidatedRecord counterpart;
-        if (baseline == srcA) {
-            counterpart = srcB != null ? srcB : srcC;  // CORE_BANKING vs. LOANS or TRADING
-        } else {
-            counterpart = srcA;  // non-CORE_BANKING baseline: counterpart is CORE_BANKING (may be null → PARTIAL)
-        }
         return buildResult(baseline, counterpart, tolerance);
     }
 
@@ -90,7 +103,9 @@ public class ReconMatchingProcessor {
         }
 
         Severity severity = toSeverity(difference.abs());
-        if (b == null && a.sourceSystem() != SourceSystem.CORE_BANKING) {
+
+        // PARTIAL: only one side arrived (the counterpart source system has no data for this period)
+        if (b == null) {
             status = MatchStatus.PARTIAL;
         }
 

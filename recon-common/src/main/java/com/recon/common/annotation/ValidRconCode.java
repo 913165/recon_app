@@ -13,7 +13,7 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 @Constraint(validatedBy = RconCodeValidator.class)
 public @interface ValidRconCode {
-    String message() default "Invalid RCON code. Expected RCON followed by 4 digits.";
+    String message() default "Invalid RCON code. Expected RCON\\d{4} (legacy) or RECON_{UPI|IMPS|NEFT|RTGS}_{CR|DR|REV|CHB|RET|REJ} (Indian payments).";
 
     Class<?>[] groups() default {};
 

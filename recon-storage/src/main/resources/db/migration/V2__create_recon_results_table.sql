@@ -3,7 +3,7 @@ CREATE TABLE recon_results (
     recon_id          VARCHAR(40)    NOT NULL,
     report_date       DATE           NOT NULL,
     entity_id         VARCHAR(10)    NOT NULL,
-    rcon_code         VARCHAR(10)    NOT NULL,
+    rcon_code         VARCHAR(30)    NOT NULL,
     source_system_a   VARCHAR(20)    NOT NULL,
     balance_a         NUMERIC(20,2),
     source_system_b   VARCHAR(20)    NOT NULL,

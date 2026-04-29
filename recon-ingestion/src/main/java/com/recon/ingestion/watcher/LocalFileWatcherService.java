@@ -90,14 +90,26 @@ public class LocalFileWatcherService implements FileWatcherService {
         fileEventProducer.publishFileArrived(arrivedEvent);
     }
 
+    /**
+     * Indian payment file naming convention:
+     *
+     * UPI_RECON_YYYYMMDD_HHmmss_NNN.dat   → UPI   (NPCI UPI switch reconciliation)
+     * IMPS_RECON_YYYYMMDD_HHmmss_NNN.dat  → IMPS  (NPCI IMPS settlement file)
+     * NEFT_RECON_YYYYMMDD_HHmmss_NNN.csv  → NEFT  (RBI NEFT batch settlement report)
+     * RTGS_RECON_YYYYMMDD_HHmmss_NNN.dat  → RTGS  (RBI RTGS gross settlement file)
+     *
+     * Files from NPCI arrive as .dat (pipe-delimited).
+     * Files from RBI arrive as .csv (comma-separated).
+     */
     private SourceSystem resolveSourceSystem(String name) {
-        if (name.startsWith("SRCA_")) {
-            return SourceSystem.CORE_BANKING;
-        }
-        if (name.startsWith("SRCB_")) {
-            return SourceSystem.LOANS_SYS;
-        }
-        return SourceSystem.TRADING_GL;
+        String upper = name.toUpperCase(Locale.ROOT);
+        if (upper.startsWith("UPI_"))  return SourceSystem.UPI;
+        if (upper.startsWith("IMPS_")) return SourceSystem.IMPS;
+        if (upper.startsWith("NEFT_")) return SourceSystem.NEFT;
+        if (upper.startsWith("RTGS_")) return SourceSystem.RTGS;
+        // default: log a warning and treat as UPI for now
+        log.warn("Unrecognised file prefix for '{}' — defaulting to UPI", name);
+        return SourceSystem.UPI;
     }
 
     private LocalDate parseDate(String fileName) {

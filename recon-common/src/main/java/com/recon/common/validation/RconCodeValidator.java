@@ -8,7 +8,13 @@ import java.util.regex.Pattern;
 
 public class RconCodeValidator implements ConstraintValidator<ValidRconCode, String> {
 
-    private static final Pattern PATTERN = Pattern.compile("^RCON\\d{4}$");
+    /**
+     * Accepts:
+     *   RCON\d{4}                              — legacy format (e.g. RCON0010)
+     *   RECON_(UPI|IMPS|NEFT|RTGS)_(CR|DR|REV|CHB|RET|REJ)  — Indian payment channels
+     */
+    private static final Pattern PATTERN =
+            Pattern.compile("^(RCON\\d{4}|RECON_(UPI|IMPS|NEFT|RTGS)_(CR|DR|REV|CHB|RET|REJ))$");
 
     @Override
     public boolean isValid(String value, ConstraintValidatorContext context) {

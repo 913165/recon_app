@@ -1,8 +1,8 @@
-# RCON Reconciliation System — REST API Testing & Learning Guide
+# RCON Indian Payment Reconciliation System — REST API Testing & Learning Guide
 
 > **Purpose:** A hands-on, step-by-step walkthrough of the entire application from first startup through
-> file ingestion, matching, break resolution, and monitoring.  
-> **Audience:** Developers and testers who want to understand how the system works end-to-end.  
+> file ingestion, matching, break resolution, and monitoring — for Indian payment channels (UPI, IMPS, NEFT, RTGS).
+> **Audience:** Developers and testers who want to understand how the system works end-to-end.
 > **Date:** 2026-04-29
 
 ---
@@ -66,7 +66,34 @@ Before making any API calls, understand what each module does:
 10. Results available via REST API
 ```
 
-### Key Entities
+### Indian Payment Source Systems
+
+| Source System | Operator | Channel Type | File Format | Settlement |
+|---|---|---|---|---|
+| `UPI` | NPCI | Real-time P2P/P2M | `.dat` pipe-delimited | Continuous 24x7 |
+| `IMPS` | NPCI | Real-time bank-to-bank | `.dat` pipe-delimited | Continuous 24x7 |
+| `NEFT` | RBI | Batch transfers | `.csv` | Half-hourly batches |
+| `RTGS` | RBI | High-value gross settlement (≥₹2L) | `.dat` pipe-delimited | Real-time gross |
+
+### Indian Payment RCON Codes
+
+| RCON Code | Channel | Type | Tolerance |
+|---|---|---|---|
+| `RECON_UPI_CR` | UPI | Credit settlements | ₹1.00 (paise rounding) |
+| `RECON_UPI_DR` | UPI | Debit settlements | ₹1.00 (paise rounding) |
+| `RECON_UPI_REV` | UPI | Reversals / refunds | ₹0.00 (exact) |
+| `RECON_UPI_CHB` | UPI | Chargebacks | ₹0.00 (exact) |
+| `RECON_IMPS_CR` | IMPS | Inward credits | ₹0.00 (exact) |
+| `RECON_IMPS_DR` | IMPS | Outward debits | ₹0.00 (exact) |
+| `RECON_IMPS_RET` | IMPS | Returns | ₹0.00 (exact) |
+| `RECON_NEFT_CR` | NEFT | Batch inward credits | ₹0.00 (exact) |
+| `RECON_NEFT_DR` | NEFT | Batch outward debits | ₹0.00 (exact) |
+| `RECON_NEFT_RET` | NEFT | Returns | ₹0.00 (exact) |
+| `RECON_RTGS_CR` | RTGS | Gross inward credits | ₹0.00 (exact) |
+| `RECON_RTGS_DR` | RTGS | Gross outward debits | ₹0.00 (exact) |
+| `RECON_RTGS_REJ` | RTGS | Rejected transactions | ₹0.00 (exact) |
+
+### Match Statuses
 
 | Entity | Table | Purpose |
 |---|---|---|
@@ -248,68 +275,58 @@ Invoke-RestMethod http://localhost:8080/actuator | ConvertTo-Json -Depth 3
 Before dropping any files, query the registry (it will return an empty list):
 
 ```powershell
-Invoke-RestMethod `
-  "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=CORE_BANKING" `
-  | ConvertTo-Json
+# UPI files for today
+Invoke-RestMethod "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=UPI" | ConvertTo-Json
+
+# NEFT files
+Invoke-RestMethod "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=NEFT" | ConvertTo-Json
 ```
 
-Response when empty:
-```json
-[]
-```
+**Source system values:** `UPI`, `IMPS`, `NEFT`, `RTGS`
 
-**Source system values:** `CORE_BANKING`, `LOANS_SYS`, `TRADING_GL`
-
-### 7.2 Drop a Sample File into the Landing Zone
+### 7.2 Drop Indian Payment Sample Files
 
 ```powershell
-# Copy the sample pipe-delimited file
-Copy-Item `
-  "recon-ingestion\src\test\resources\sample\SRCA_RECON_20260428_093000_001.dat" `
-  "data\landing\"
+# UPI — NPCI switch reconciliation file (pipe-delimited .dat)
+Copy-Item "recon-ingestion\src\test\resources\sample\UPI_RECON_20260429_093000_001.dat" "data\landing\"
+
+# Wait 5 seconds then check
+Invoke-RestMethod "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=UPI" | ConvertTo-Json
 ```
 
-The sample file contains:
+The UPI sample file contains:
 ```
-HDR|SRCA_20260428_001|CORE_BANKING|20260428|E001|5|135550000.00|1.0
-DTL|SRCA000001|20260428|E001|...|RCON0010|5000000.00|CR|...
-DTL|SRCA000002|20260428|E001|...|RCON0071|1250000.00|CR|...
-DTL|SRCA000003|20260428|E001|...|RCON2122|87500000.00|DR|...
-DTL|SRCA000004|20260428|E001|...|RCON2200|32000000.00|CR|...
-DTL|SRCA000005|20260428|E001|...|RCON1754|9800000.00|DR|...
-TRL|5|135550000.00|COMPLETE
+HDR|UPI_20260429_001|UPI|20260429|HDFC0001|6|28750000.00|1.0
+DTL|UPI000001|20260429|HDFC0001|...|RECON_UPI_CR|15000000.00|CR|INR|...|VPA:9876543210@hdfcbank|
+DTL|UPI000002|20260429|HDFC0001|...|RECON_UPI_DR|8500000.00|DR|INR|...|VPA:user123@okaxis|
+DTL|UPI000003|20260429|HDFC0001|...|RECON_UPI_REV|250000.00|CR|INR|...|VPA:refund@hdfcbank|
+...
+TRL|6|28750000.00|COMPLETE
 ```
 
-**What happens inside:**
-1. `LocalFileWatcherService` detects the new file within 5 seconds
-2. Parses header (HDR) — extracts source system, date, entity, expected count & total
-3. Parses 5 detail records (DTL)
-4. Validates trailer (TRL) — confirms count and control total match
-5. Writes to `recon_staging`, publishes to Kafka
-
-Wait 5–10 seconds, then check the registry again:
+Key fields in a UPI record:
+- `VPA` — Virtual Payment Address (e.g. `9876543210@hdfcbank`)
+- `pay_*` — NPCI UPI transaction reference (source_ref field)
+- `CR/DR` — credit to bank account / debit from bank account
 
 ```powershell
-Invoke-RestMethod `
-  "http://localhost:8080/api/v1/files?reportDate=2026-04-28&sourceSystem=CORE_BANKING" `
-  | ConvertTo-Json
+# IMPS — NPCI bank-to-bank instant transfer file
+Copy-Item "recon-ingestion\src\test\resources\sample\IMPS_RECON_20260429_090000_001.dat" "data\landing\"
+
+# NEFT — RBI batch settlement CSV (different format — comma-separated)
+Copy-Item "recon-ingestion\src\test\resources\sample\NEFT_RECON_20260429_120000_001.csv" "data\landing\"
+
+# RTGS — RBI high-value gross settlement file (≥₹2 Lakh per transaction)
+Copy-Item "recon-ingestion\src\test\resources\sample\RTGS_RECON_20260429_110000_001.dat" "data\landing\"
 ```
 
-Expected response:
-```json
-[
-  {
-    "fileId": "SRCA_20260428_001",
-    "fileName": "SRCA_RECON_20260428_093000_001.dat",
-    "sourceSystem": "CORE_BANKING",
-    "reportDate": "2026-04-28",
-    "fileStatus": "COMPLETED",
-    "totalRecords": 5,
-    "processedRecords": 5,
-    "errorCount": 0,
-    "receivedAt": "2026-04-29T..."
-  }
-]
+After dropping all 4 files wait 10–15 seconds then verify all channels:
+
+```powershell
+@("UPI","IMPS","NEFT","RTGS") | ForEach-Object {
+    Write-Host "--- $_ ---"
+    Invoke-RestMethod "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=$_" | ConvertTo-Json
+}
 ```
 
 ### 7.3 Get a Single File's Status
@@ -354,60 +371,47 @@ Invoke-RestMethod -Method Post `
 ### 8.1 Get All Results for a Date and Entity
 
 ```powershell
+# All matched UPI records for today
 Invoke-RestMethod `
-  "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=MATCHED&severity=LOW&page=0&size=20" `
+  "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-29&entityId=HDFC0001&status=MATCHED&severity=LOW&page=0&size=20" `
   | ConvertTo-Json -Depth 5
 ```
 
-**Query parameters explained:**
-
-| Parameter | Required | Values | Meaning |
-|---|---|---|---|
-| `reportDate` | ✅ | `YYYY-MM-DD` | The business date of the reconciliation |
-| `entityId` | ✅ | e.g. `E001` | The reporting entity (bank branch, subsidiary) |
-| `status` | ✅ | `MATCHED`, `BREAK`, `UNMATCHED`, `PARTIAL` | Filter by match outcome |
-| `severity` | ✅ | `LOW`, `MEDIUM`, `HIGH`, `CRITICAL` | Filter by break severity |
-| `page` | ❌ | integer, default `0` | Zero-based page number |
-| `size` | ❌ | integer, default `50` | Results per page |
-
-**Try all statuses one by one:**
+**Try all statuses:**
 
 ```powershell
-# Matched records
-Invoke-RestMethod "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=MATCHED&severity=LOW" | ConvertTo-Json
+# UPI breaks (paise rounding difference > ₹1.00)
+Invoke-RestMethod "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-29&entityId=HDFC0001&status=BREAK&severity=HIGH" | ConvertTo-Json
 
-# Breaks (records where difference > tolerance)
-Invoke-RestMethod "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=BREAK&severity=HIGH" | ConvertTo-Json
+# NEFT unmatched (RBI batch file arrived, CBS file not yet received)
+Invoke-RestMethod "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-29&entityId=HDFC0001&status=UNMATCHED&severity=MEDIUM" | ConvertTo-Json
 
-# Unmatched (only one source provided this RCON code)
-Invoke-RestMethod "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=UNMATCHED&severity=MEDIUM" | ConvertTo-Json
+# RTGS partial (only one side of high-value settlement arrived)
+Invoke-RestMethod "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-29&entityId=HDFC0001&status=PARTIAL&severity=HIGH" | ConvertTo-Json
 ```
 
-**Example response:**
+**Example response (UPI credit matched):**
 ```json
 {
   "content": [
     {
-      "reconId": "RCON-E001-20260428-RCON0010",
-      "reportDate": "2026-04-28",
-      "entityId": "E001",
-      "rconCode": "RCON0010",
-      "sourceSystemA": "CORE_BANKING",
-      "balanceA": 5000000.00,
-      "sourceSystemB": "LOANS_SYS",
-      "balanceB": 5000000.00,
-      "tolerance": 0.00,
+      "reconId": "RCON-HDFC0001-20260429-RECON_UPI_CR",
+      "reportDate": "2026-04-29",
+      "entityId": "HDFC0001",
+      "rconCode": "RECON_UPI_CR",
+      "sourceSystemA": "UPI",
+      "balanceA": 15000000.00,
+      "sourceSystemB": "IMPS",
+      "balanceB": 15000000.00,
+      "tolerance": 1.00,
       "matchStatus": "MATCHED",
       "severity": null,
-      "breakReason": null,
-      "resolved": false,
-      "createdAt": "2026-04-29T..."
+      "currency": "INR",
+      "resolved": false
     }
   ],
-  "totalElements": 5,
-  "totalPages": 1,
-  "size": 20,
-  "number": 0
+  "totalElements": 6,
+  "totalPages": 1
 }
 ```
 
@@ -425,20 +429,29 @@ Invoke-RestMethod `
 
 ## 9. Resolve a Break
 
-When a break is investigated and explained, it is marked as resolved:
+When a break is investigated and explained, it is marked as resolved.
+
+**Common Indian payment break scenarios:**
 
 ```powershell
+# UPI paise rounding break — confirmed acceptable
 Invoke-RestMethod -Method Patch `
-  -Uri "http://localhost:8080/api/v1/recon/results/RCON-E001-20260428-RCON2122/resolve" `
+  -Uri "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_UPI_CR/resolve" `
   -ContentType "application/json" `
-  -Body '{"resolutionNote": "Timing difference — loan booked after cut-off. Confirmed with Loans desk."}'
+  -Body '{"resolutionNote": "Paise rounding difference of ₹0.50 on UPI credit batch. Within NPCI accepted tolerance. Waived per Ops Manager approval #UPI-2026-0429."}'
+
+# NEFT amount mismatch — timing difference in RBI batch
+Invoke-RestMethod -Method Patch `
+  -Uri "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_NEFT_DR/resolve" `
+  -ContentType "application/json" `
+  -Body '{"resolutionNote": "NEFT batch 3 (16:00 cut-off) posted to CBS at 16:32 — after RBI settlement report generated. Difference ₹92,50,000 will auto-clear in next batch cycle."}'
+
+# RTGS rejection — beneficiary account frozen
+Invoke-RestMethod -Method Patch `
+  -Uri "http://localhost:8080/api/v1/recon/results/RCON-HDFC0001-20260429-RECON_RTGS_REJ/resolve" `
+  -ContentType "application/json" `
+  -Body '{"resolutionNote": "RTGS transaction RBI2026294567890004 rejected — beneficiary account frozen per RBI directive. Amount ₹0. No financial impact. JIRA: RTGS-2026-0429-001."}'
 ```
-
-After resolving, re-query the result and observe:
-- `resolved: true`
-- Resolution note is stored in audit history
-
-**What to learn:** The resolve workflow models a real operations process. In production, this would trigger a JIRA ticket close and Slack notification.
 
 ---
 
@@ -760,18 +773,27 @@ curl http://localhost:8080/actuator/info
 # ── Swagger ─────────────────────────────────────────────────────
 start http://localhost:8080/swagger-ui/index.html
 
+# ── Drop Indian payment files ────────────────────────────────────
+Copy-Item "recon-ingestion\src\test\resources\sample\UPI_RECON_20260429_093000_001.dat"  "data\landing\"
+Copy-Item "recon-ingestion\src\test\resources\sample\IMPS_RECON_20260429_090000_001.dat" "data\landing\"
+Copy-Item "recon-ingestion\src\test\resources\sample\NEFT_RECON_20260429_120000_001.csv" "data\landing\"
+Copy-Item "recon-ingestion\src\test\resources\sample\RTGS_RECON_20260429_110000_001.dat" "data\landing\"
+
 # ── Files ───────────────────────────────────────────────────────
-curl "http://localhost:8080/api/v1/files?reportDate=2026-04-28&sourceSystem=CORE_BANKING"
-curl "http://localhost:8080/api/v1/files/SRCA_20260428_001/status"
+# sourceSystem: UPI | IMPS | NEFT | RTGS
+curl "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=UPI"
+curl "http://localhost:8080/api/v1/files?reportDate=2026-04-29&sourceSystem=NEFT"
 
 # ── Results ─────────────────────────────────────────────────────
-curl "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-28&entityId=E001&status=MATCHED&severity=LOW"
-curl "http://localhost:8080/api/v1/recon/summary?reportDate=2026-04-28"
+# entityId: HDFC0001   status: MATCHED|BREAK|UNMATCHED|PARTIAL   severity: LOW|MEDIUM|HIGH|CRITICAL
+curl "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-29&entityId=HDFC0001&status=MATCHED&severity=LOW"
+curl "http://localhost:8080/api/v1/recon/results?reportDate=2026-04-29&entityId=HDFC0001&status=BREAK&severity=HIGH"
+curl "http://localhost:8080/api/v1/recon/summary?reportDate=2026-04-29"
 
-# ── Resolve a break ─────────────────────────────────────────────
+# ── Resolve a break (INR context) ───────────────────────────────
 curl -X PATCH http://localhost:8080/api/v1/recon/results/{reconId}/resolve \
   -H "Content-Type: application/json" \
-  -d '{"resolutionNote":"Explained"}'
+  -d '{"resolutionNote":"NEFT batch timing difference. Will clear in next cycle."}'
 
 # ── Database ────────────────────────────────────────────────────
 docker compose exec postgres psql -U recon_user -d recondb
@@ -779,5 +801,12 @@ docker compose exec postgres psql -U recon_user -d recondb
 # ── Kafka ───────────────────────────────────────────────────────
 docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic recon.file.arrived --from-beginning
+
+# ── RCON codes in DB ─────────────────────────────────────────────
+# docker compose exec postgres psql -U recon_user -d recondb -c "SELECT rcon_code, tolerance FROM rcon_tolerance_config ORDER BY rcon_code;"
+# RECON_IMPS_CR  0.00  |  RECON_IMPS_DR  0.00  |  RECON_IMPS_RET  0.00
+# RECON_NEFT_CR  0.00  |  RECON_NEFT_DR  0.00  |  RECON_NEFT_RET  0.00
+# RECON_RTGS_CR  0.00  |  RECON_RTGS_DR  0.00  |  RECON_RTGS_REJ  0.00
+# RECON_UPI_CR   1.00  |  RECON_UPI_DR   1.00  |  RECON_UPI_CHB   0.00  |  RECON_UPI_REV  0.00
 ```
 
